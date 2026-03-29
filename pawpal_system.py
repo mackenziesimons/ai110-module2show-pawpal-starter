@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -31,6 +32,29 @@ class Task:
 	def is_overdue(self, current_time: datetime) -> bool:
 		"""Return True if the task is past due and not yet completed."""
 		return not self.completed and self.time < current_time
+
+	def next_occurrence(self) -> Task | None:
+		"""Return a new task for the next recurrence, or None for one-time tasks."""
+		if self.frequency == "once":
+			return None
+		if self.frequency == "daily":
+			next_time = self.time + timedelta(days=1)
+		elif self.frequency == "weekly":
+			next_time = self.time + timedelta(weeks=1)
+		else:
+			year = self.time.year
+			month = self.time.month + 1
+			if month == 13:
+				month = 1
+				year += 1
+			day = min(self.time.day, calendar.monthrange(year, month)[1])
+			next_time = self.time.replace(year=year, month=month, day=day)
+
+		return Task(
+			description=self.description,
+			time=next_time,
+			frequency=self.frequency,
+		)
 
 	def occurs_on(self, target_date: date) -> bool:
 		"""Return whether this task should appear on the target date."""
@@ -123,6 +147,27 @@ class Scheduler:
 		"""Return all tasks across the owner's pets via the owner's aggregator."""
 		return owner.get_all_tasks(include_completed=include_completed)
 
+	def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+		"""Return a new task list sorted by due time."""
+		return sorted(tasks, key=lambda task: task.time)
+
+	def filter_tasks(
+		self,
+		owner: Owner,
+		pet_name: str | None = None,
+		completed: bool | None = None,
+	) -> list[Task]:
+		"""Return tasks filtered by pet name and/or completion status, sorted by time."""
+		filtered_tasks: list[Task] = []
+		for pet in owner.pets:
+			if pet_name is not None and pet.name != pet_name:
+				continue
+			for task in pet.get_tasks(include_completed=True):
+				if completed is not None and task.completed != completed:
+					continue
+				filtered_tasks.append(task)
+		return self.sort_by_time(filtered_tasks)
+
 	def build_today_plan(self, owner: Owner, current_time: datetime | None = None) -> list[Task]:
 		"""Return all incomplete tasks due today, sorted chronologically."""
 		now = current_time or datetime.now()
@@ -132,7 +177,7 @@ class Scheduler:
 			for task in owner.get_all_tasks(include_completed=False)
 			if task.occurs_on(today)
 		]
-		return sorted(tasks_for_today, key=lambda task: task.time)
+		return self.sort_by_time(tasks_for_today)
 
 	def get_upcoming_tasks(
 		self,
@@ -145,20 +190,59 @@ class Scheduler:
 		end_time = now + timedelta(hours=within_hours)
 		candidates = owner.get_all_tasks(include_completed=False)
 		upcoming = [task for task in candidates if now <= task.time <= end_time]
-		return sorted(upcoming, key=lambda task: task.time)
+		return self.sort_by_time(upcoming)
 
-	def complete_task(self, owner: Owner, task: Task) -> None:
-		"""Mark a task as complete after verifying it belongs to the owner."""
-		if task not in owner.get_all_tasks(include_completed=True):
+	def complete_task(self, owner: Owner, task: Task) -> Task | None:
+		"""Mark a task as complete and create the next recurring task when needed."""
+		pet = self.find_pet_for_task(owner, task)
+		if pet is None:
 			raise ValueError("Task does not belong to this owner")
+		if task.completed:
+			raise ValueError("Task is already completed")
 		task.mark_complete()
+		next_task = task.next_occurrence()
+		if next_task is not None:
+			pet.add_task(next_task)
+		return next_task
+
+	def mark_task_complete(self, owner: Owner, task: Task) -> Task | None:
+		"""Mark a task complete and create its next occurrence for recurring tasks."""
+		return self.complete_task(owner, task)
+
+	def find_pet_for_task(self, owner: Owner, task: Task) -> Pet | None:
+		"""Return the pet that owns the given task, or None if it is not found."""
+		for pet in owner.pets:
+			if task in pet.tasks:
+				return pet
+		return None
+
+	def detect_conflicts(self, owner: Owner, include_completed: bool = False) -> list[str]:
+		"""Return warning messages for tasks that share the exact same scheduled time."""
+		warnings: list[str] = []
+		tasks_with_pets: list[tuple[Task, Pet]] = []
+		for pet in owner.pets:
+			for task in pet.get_tasks(include_completed=include_completed):
+				tasks_with_pets.append((task, pet))
+
+		sorted_tasks_with_pets = sorted(tasks_with_pets, key=lambda item: item[0].time)
+		for index in range(len(sorted_tasks_with_pets) - 1):
+			current_task, current_pet = sorted_tasks_with_pets[index]
+			next_task, next_pet = sorted_tasks_with_pets[index + 1]
+			if current_task.time != next_task.time:
+				continue
+			warnings.append(
+				(
+					"Conflict detected at "
+					f"{current_task.time.strftime('%Y-%m-%d %H:%M')}: "
+					f"{current_pet.name} - {current_task.description} and "
+					f"{next_pet.name} - {next_task.description}"
+				)
+			)
+		return warnings
 
 	def organize_tasks_by_pet(self, owner: Owner) -> dict[str, list[Task]]:
 		"""Return a dict mapping each pet's name to its time-sorted task list."""
 		organized: dict[str, list[Task]] = {}
 		for pet in owner.pets:
-			organized[pet.name] = sorted(
-				pet.get_tasks(include_completed=True),
-				key=lambda task: task.time,
-			)
+			organized[pet.name] = self.sort_by_time(pet.get_tasks(include_completed=True))
 		return organized

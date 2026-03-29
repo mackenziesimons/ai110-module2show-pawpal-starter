@@ -4,13 +4,11 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+My initial UML design used four classes that separate data modeling, scheduling logic, and app orchestration. The `Pet` class stores profile information for each pet (name, species, age, and preferences) and handles updates to that profile. The `CareTask` class represents individual care actions tied to a pet (such as feeding or walking), including due time, priority, and completion status. The `Scheduler` class is responsible for planning and prioritizing tasks based on constraints like urgency and priority, and for resolving task conflicts in a simple, predictable way. The `PawPalApp` class acts as the coordinator: it keeps the collections of pets and tasks, calls the scheduler to build today's plan, and exposes user-facing actions like adding a pet, scheduling a task, and completing a task.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes. After AI feedback, I refined the original design in three ways. First, I made the Pet-to-Task relationship more explicit by planning app-level validation that a task's `pet_id` must match an existing pet before scheduling, which prevents orphaned tasks and keeps data consistent. Second, I identified a potential performance bottleneck in list-only lookups, so I updated the design to include fast ID-based access patterns (for example, pet/task maps) while still keeping ordered task lists for display. Third, I aligned responsibilities more clearly between `PawPalApp` and `Scheduler`: `PawPalApp` handles storage and user actions, while `Scheduler` focuses only on prioritization, today's planning, and conflict resolution. These changes make the architecture safer, easier to scale, and easier to reason about during testing.
 
 **c. Core user actions**
 
@@ -74,8 +72,7 @@ classDiagram
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+One tradeoff my scheduler makes is that conflict detection only checks for exact matching task times instead of trying to detect overlapping time ranges or estimate travel/setup time between tasks. This is less sophisticated than a full calendar system, but it keeps the logic lightweight, easy to test, and appropriate for a small pet care planner where the main goal is to flag obvious scheduling problems without overcomplicating the implementation.
 
 ---
 
